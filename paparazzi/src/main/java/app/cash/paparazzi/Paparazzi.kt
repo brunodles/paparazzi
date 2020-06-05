@@ -17,6 +17,7 @@ package app.cash.paparazzi
 
 import android.content.Context
 import android.content.res.Resources
+import android.util.AttributeSet
 import android.view.BridgeInflater
 import android.view.Choreographer_Delegate
 import android.view.LayoutInflater
@@ -24,11 +25,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.AnimationUtils
 import androidx.annotation.LayoutRes
+import app.cash.paparazzi.agent.AgentTestRule
+import app.cash.paparazzi.agent.InterceptorRegistrar
 import app.cash.paparazzi.internal.ImageUtils
 import app.cash.paparazzi.internal.LayoutPullParser
 import app.cash.paparazzi.internal.PaparazziCallback
 import app.cash.paparazzi.internal.PaparazziLogger
 import app.cash.paparazzi.internal.Renderer
+import app.cash.paparazzi.internal.ResourcesInterceptor
 import app.cash.paparazzi.internal.SessionParamsBuilder
 import com.android.ide.common.rendering.api.RenderSession
 import com.android.ide.common.rendering.api.Result
@@ -43,6 +47,8 @@ import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.Statement
 import java.awt.image.BufferedImage
+import java.lang.reflect.Field
+import java.lang.reflect.Modifier
 import java.util.Date
 import java.util.concurrent.TimeUnit
 
@@ -50,6 +56,7 @@ class Paparazzi(
   private val environment: Environment = detectEnvironment(),
   private val deviceConfig: DeviceConfig = DeviceConfig.NEXUS_5,
   private val theme: String = "android:Theme.Material.NoActionBar.Fullscreen",
+  private val appCompatEnabled: Boolean = true,
   private val snapshotHandler: SnapshotHandler = HtmlReportWriter()
 ) : TestRule {
   private val THUMBNAIL_SIZE = 1000
@@ -81,18 +88,24 @@ class Paparazzi(
   override fun apply(
     base: Statement,
     description: Description
-  ) = object : Statement() {
-    override fun evaluate() {
-      prepare(description)
-      try {
-        base.evaluate()
-      } finally {
-        close()
+  ): Statement {
+    val statement = object : Statement() {
+      override fun evaluate() {
+        prepare(description)
+        try {
+          base.evaluate()
+        } finally {
+          close()
+        }
       }
     }
+
+    return wrapIfResourceCompatDetected(statement, description)
   }
 
   fun prepare(description: Description) {
+    forcePlatformSdkVersion(environment.compileSdkVersion)
+
     val layoutlibCallback = PaparazziCallback(logger, environment.packageName)
     layoutlibCallback.initResources()
 
@@ -113,6 +126,12 @@ class Paparazzi(
     renderSession = RenderSessionImpl(sessionParams)
     prepareThread()
     renderSession.init(sessionParams.timeout)
+
+    // requires LayoutInflater to be created, which is a side-effect of RenderSessionImpl.init()
+    if (appCompatEnabled) {
+      initializeAppCompatIfPresent()
+    }
+
     bridgeRenderSession = createBridgeSession(renderSession, renderSession.inflate())
   }
 
@@ -212,7 +231,10 @@ class Paparazzi(
     }
   }
 
-  private fun withTime(timeNanos: Long, block: () -> Unit) {
+  private fun withTime(
+    timeNanos: Long,
+    block: () -> Unit
+  ) {
     val frameNanos = TIME_OFFSET_NANOS + timeNanos
 
     // Execute the block at the requested time.
@@ -254,6 +276,124 @@ class Paparazzi(
     val packageName = testClass.`package`.name
     val className = testClass.name.substring(packageName.length + 1)
     return TestName(packageName, className, methodName)
+  }
+
+  private fun forcePlatformSdkVersion(compileSdkVersion: Int) {
+    val modifiersField: Field = Field::class.java
+        .getDeclaredField("modifiers")
+        .apply {
+          isAccessible = true
+        }
+
+    val versionClass = try {
+      Paparazzi::class.java.classLoader.loadClass("android.os.Build\$VERSION")
+    } catch (e: ClassNotFoundException) {
+      return
+    }
+
+    versionClass
+        .getDeclaredField("SDK_INT")
+        .apply {
+          modifiersField.setInt(this, modifiers and Modifier.FINAL.inv())
+          setInt(null, compileSdkVersion)
+        }
+  }
+
+  private fun initializeAppCompatIfPresent() {
+    lateinit var appCompatDelegateClass: Class<*>
+    try {
+      // See androidx.appcompat.widget.AppCompatDrawableManager#preload()
+      val appCompatDrawableManagerClass =
+        Class.forName("androidx.appcompat.widget.AppCompatDrawableManager")
+      val preloadMethod = appCompatDrawableManagerClass.getMethod("preload")
+      preloadMethod.invoke(null)
+
+      appCompatDelegateClass = Class.forName("androidx.appcompat.app.AppCompatDelegate")
+    } catch (e: ClassNotFoundException) {
+      logger.info("AppCompat not found on classpath, exiting...")
+      return
+    }
+
+    // See androidx.appcompat.app.AppCompatDelegateImpl#installViewFactory()
+    if (layoutInflater.factory == null) {
+      layoutInflater.factory2 = object : LayoutInflater.Factory2 {
+        override fun onCreateView(
+          parent: View?,
+          name: String,
+          context: Context,
+          attrs: AttributeSet
+        ): View? {
+          val appCompatViewInflaterClass =
+            Class.forName("androidx.appcompat.app.AppCompatViewInflater")
+
+          val createViewMethod = appCompatViewInflaterClass
+              .getDeclaredMethod(
+                  "createView",
+                  View::class.java,
+                  String::class.java,
+                  Context::class.java,
+                  AttributeSet::class.java,
+                  Boolean::class.javaPrimitiveType,
+                  Boolean::class.javaPrimitiveType,
+                  Boolean::class.javaPrimitiveType,
+                  Boolean::class.javaPrimitiveType
+              )
+              .apply { isAccessible = true }
+
+          val inheritContext = true
+          val readAndroidTheme = true
+          val readAppTheme = true
+          val wrapContext = true
+
+          val newAppCompatViewInflaterInstance = appCompatViewInflaterClass
+              .getConstructor()
+              .newInstance()
+
+          return createViewMethod.invoke(
+              newAppCompatViewInflaterInstance, parent, name, context, attrs,
+              inheritContext, readAndroidTheme, readAppTheme, wrapContext
+          ) as View?
+        }
+
+        override fun onCreateView(
+          name: String,
+          context: Context,
+          attrs: AttributeSet
+        ): View? = onCreateView(null, name, context, attrs)
+      }
+    } else {
+      if (!appCompatDelegateClass.isAssignableFrom(layoutInflater.factory2::class.java)) {
+        throw IllegalStateException(
+            "The LayoutInflater already has a Factory installed so we can not install AppCompat's"
+        )
+      }
+    }
+  }
+
+  /**
+   * Current workaround for supporting custom fonts when constructing views in code. This check
+   * may be used or expanded to support other cases requiring similar method interception
+   * techniques.
+   *
+   * See:
+   * https://github.com/cashapp/paparazzi/issues/119
+   * https://issuetracker.google.com/issues/156065472
+   */
+  private fun wrapIfResourceCompatDetected(
+    innerStatement: Statement,
+    description: Description
+  ): Statement {
+    return try {
+      val resourcesCompatClass = Class.forName("androidx.core.content.res.ResourcesCompat")
+      InterceptorRegistrar.addMethodInterceptor(
+          resourcesCompatClass, "getFont", ResourcesInterceptor::class.java
+      )
+      val outerRule = AgentTestRule()
+      outerRule.apply(innerStatement, description)
+    } catch (e: ClassNotFoundException) {
+      logger.info("ResourceCompat not found on classpath, exiting...")
+      innerStatement
+    }
   }
 
   companion object {
