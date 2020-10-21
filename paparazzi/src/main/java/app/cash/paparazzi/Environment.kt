@@ -16,40 +16,33 @@
 package app.cash.paparazzi
 
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Paths
 
 data class Environment(
   val platformDir: String,
   val appTestDir: String,
   val resDir: String,
+  val assetsDir: String,
   val packageName: String,
-  val compileSdkVersion: Int
-) {
-  val assetsDir = "$appTestDir/src/main/assets/"
-}
+  val compileSdkVersion: Int)
+
+@Suppress("unused")
+fun androidHome() = System.getenv("ANDROID_SDK_ROOT")
+    ?: System.getenv("ANDROID_HOME")
+    ?: "${System.getProperty("user.home")}/Library/Android/sdk"
 
 fun detectEnvironment(): Environment {
   checkInstalledJvm()
 
-  val userDir = System.getProperty("user.dir")
-  val userHome = System.getProperty("user.home")
-  val androidHome = System.getenv("ANDROID_SDK_ROOT")
-      ?: System.getenv("ANDROID_HOME")
-      ?: "$userHome/Library/Android/sdk"
-  val platformDir = Files.list(Paths.get("$androidHome/platforms"))
-      .filter { Files.isDirectory(it) }
-      .map { it.toString() }
-      .sorted()
-      .reduce { _, next -> next }
-      .orElse(null)
-
-  val configLines = File("build/intermediates/paparazzi/resources.txt").readLines()
-  val packageName = configLines[0]
-  val resDir = configLines[1]
-  val compileSdkVersion = configLines[2].toInt()
-
-  return Environment(platformDir, userDir, resDir, packageName, compileSdkVersion)
+  val resourcesFile = File(System.getProperty("paparazzi.test.resources"))
+  val configLines = resourcesFile.readLines()
+  return Environment(
+      platformDir = configLines[3],
+      appTestDir = System.getProperty("user.dir"),
+      resDir = configLines[1],
+      assetsDir = configLines[4],
+      packageName = configLines[0],
+      compileSdkVersion = configLines[2].toInt()
+  )
 }
 
 private fun checkInstalledJvm() {

@@ -13,10 +13,10 @@ class AgentTestRule : TestRule {
     override fun evaluate() {
       ByteBuddyAgent.install()
       InterceptorRegistrar.registerMethodInterceptors()
-
       try {
         base.evaluate()
       } finally {
+        InterceptorRegistrar.clearMethodInterceptors()
       }
     }
   }

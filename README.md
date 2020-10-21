@@ -5,14 +5,41 @@ An Android library to render your application screens without a physical device 
 
 See the [project website][paparazzi] for documentation and APIs.
 
+Jetifier
+--------
+
+If using Jetifier to migrate off Support libraries, add the following to your `gradle.properties` to 
+exclude bundled Android dependencies.
+
+```groovy
+android.jetifier.blacklist=android-base-common,common
+```
 
 Releases
 --------
 
 Our [change log][changelog] has release history.
 
+Using plugin application:
 ```groovy
-implementation 'app.cash.paparazzi:paparazzi:0.1.0'
+buildscript {
+  repositories {
+    mavenCentral()
+    google()
+  }
+  dependencies {
+    classpath 'app.cash.paparazzi:paparazzi-gradle-plugin:0.6.0'
+  }
+}
+
+apply plugin: 'app.cash.paparazzi'
+```
+
+Using the plugins DSL:
+```groovy
+plugins {
+  id 'app.cash.paparazzi' version '0.6.0'
+}
 ```
 
 Snapshots of the development version are available in [Sonatype's `snapshots` repository][snap].
@@ -25,6 +52,30 @@ repositories {
   }
 }
 ```
+
+Tasks
+-------
+```
+$ ./gradlew some-project:testDebug
+```
+
+Runs tests and generates an HTML report at `some-project/build/reports/paparazzi/debug/` showing all 
+test runs and snapshots. 
+
+```
+$ ./gradlew some-project:recordPaparazziDebug
+```
+
+Saves snapshots as golden values to a predefined source-controlled location 
+(default: `src/test/snapshots`).
+
+```
+$ ./gradlew some-project:verifyPaparazziDebug
+```
+
+Runs tests and verifies against previously-recorded golden values.
+
+Check out the [sample](sample).
 
 License
 -------

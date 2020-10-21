@@ -19,10 +19,13 @@ import app.cash.paparazzi.VERSION
 import com.android.build.gradle.LibraryExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.logging.LogLevel.LIFECYCLE
 import org.gradle.api.plugins.JavaBasePlugin
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.plugin.KotlinBasePluginWrapper
 import java.util.Locale
 
+@Suppress("unused")
 class PaparazziPlugin : Plugin<Project> {
   @OptIn(ExperimentalStdlibApi::class)
   override fun apply(project: Project) {
@@ -41,14 +44,10 @@ class PaparazziPlugin : Plugin<Project> {
 
       val writeResourcesTask = project.tasks.register(
           "preparePaparazzi${variantSlug}Resources", PrepareResourcesTask::class.java
-      ) {
-        // TODO: variant-aware file path
-        it.outputs.file("${project.buildDir}/intermediates/paparazzi/resources.txt")
-
-        // Temporary, until AGP provides outputDir as Provider<File>
-        it.mergeResourcesProvider = variant.mergeResourcesProvider
-        it.outputDir = project.layout.buildDirectory.dir("intermediates/paparazzi/resources.txt")
-        it.dependsOn(variant.mergeResourcesProvider)
+      ) { task ->
+        task.mergeResourcesOutput.set(variant.mergeResourcesProvider.flatMap { it.outputDir })
+        task.mergeAssetsOutput.set(variant.mergeAssetsProvider.flatMap { it.outputDir })
+        task.paparazziResources.set(project.layout.buildDirectory.file("intermediates/paparazzi/${variant.name}/resources.txt"))
       }
 
       val testVariantSlug = variant.unitTestVariant.name.capitalize(Locale.US)
@@ -61,6 +60,30 @@ class PaparazziPlugin : Plugin<Project> {
       project.plugins.withType(KotlinBasePluginWrapper::class.java) {
         project.tasks.named("compile${testVariantSlug}Kotlin")
             .configure { it.dependsOn(writeResourcesTask) }
+      }
+
+      val recordTaskProvider = project.tasks.register("recordPaparazzi${variantSlug}")
+      val verifyTaskProvider = project.tasks.register("verifyPaparazzi${variantSlug}")
+
+      val testTaskProvider = project.tasks.named("test${testVariantSlug}", Test::class.java) { test ->
+        test.systemProperties["paparazzi.test.resources"] =
+            writeResourcesTask.flatMap { it.paparazziResources.asFile }.get().path
+        test.doFirst {
+          test.systemProperties["paparazzi.test.record"] =
+              project.gradle.taskGraph.hasTask(recordTaskProvider.get())
+          test.systemProperties["paparazzi.test.verify"] =
+              project.gradle.taskGraph.hasTask(verifyTaskProvider.get())
+        }
+      }
+
+      recordTaskProvider.configure { it.dependsOn(testTaskProvider) }
+      verifyTaskProvider.configure { it.dependsOn(testTaskProvider) }
+
+      testTaskProvider.configure {
+        it.doLast {
+          val uri = project.buildDir.toPath().resolve("reports/paparazzi/index.html").toUri()
+          project.logger.log(LIFECYCLE, "See the Paparazzi report at: $uri")
+        }
       }
     }
   }

@@ -4,6 +4,7 @@ import app.cash.paparazzi.gradle.ImageSubject.Companion.assertThat
 import com.google.common.truth.Truth.assertThat
 import org.gradle.testkit.runner.BuildResult
 import org.gradle.testkit.runner.GradleRunner
+import org.gradle.testkit.runner.TaskOutcome.FROM_CACHE
 import org.junit.Before
 import org.junit.Ignore
 import org.junit.Test
@@ -34,6 +35,149 @@ class PaparazziPluginTest {
   }
 
   @Test
+  fun cacheable() {
+    val fixtureRoot = File("src/test/projects/cacheable")
+
+    val firstRun = gradleRunner
+        .withArguments("testDebug", "--build-cache", "--stacktrace")
+        .runFixture(fixtureRoot) { build() }
+
+    with(firstRun.task(":preparePaparazziDebugResources")) {
+      assertThat(this).isNotNull()
+      assertThat(this!!.outcome).isNotEqualTo(FROM_CACHE)
+    }
+
+    fixtureRoot.resolve("build").deleteRecursively()
+
+    val secondRun = gradleRunner
+        .withArguments("testDebug", "--build-cache", "--stacktrace")
+        .runFixture(fixtureRoot) { build() }
+
+    with(secondRun.task(":preparePaparazziDebugResources")) {
+      assertThat(this).isNotNull()
+      assertThat(this!!.outcome).isEqualTo(FROM_CACHE)
+    }
+
+    fixtureRoot.resolve("build-cache").deleteRecursively()
+  }
+
+  @Test
+  fun interceptViewEditMode() {
+    val fixtureRoot = File("src/test/projects/edit-mode-intercept")
+
+    gradleRunner
+        .withArguments("testDebug", "--stacktrace")
+        .runFixture(fixtureRoot) { build() }
+  }
+
+  @Test
+  fun record() {
+    val fixtureRoot = File("src/test/projects/record-mode")
+
+    val result = gradleRunner
+        .withArguments("recordPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot) { build() }
+
+    assertThat(result.task(":testDebugUnitTest")).isNotNull()
+
+    val snapshotsDir = File(fixtureRoot, "src/test/snapshots")
+
+    val snapshot = File(snapshotsDir, "images/app.cash.paparazzi.plugin.test_RecordTest_record.png")
+    assertThat(snapshot.exists()).isTrue()
+
+    val snapshotWithLabel = File(snapshotsDir, "images/app.cash.paparazzi.plugin.test_RecordTest_record_label.png")
+    assertThat(snapshotWithLabel.exists()).isTrue()
+
+    snapshotsDir.deleteRecursively()
+  }
+
+  @Test
+  fun recordMultiModuleProject() {
+    val fixtureRoot = File("src/test/projects/record-mode-multiple-modules")
+    val moduleRoot = File(fixtureRoot, "module")
+
+    val result = gradleRunner
+        .withArguments("module:recordPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot, moduleRoot) { build() }
+
+    assertThat(result.task(":module:testDebugUnitTest")).isNotNull()
+
+    val snapshotsDir = File(moduleRoot, "src/test/snapshots")
+
+    val snapshot = File(snapshotsDir, "images/app.cash.paparazzi.plugin.test_RecordTest_record.png")
+    assertThat(snapshot.exists()).isTrue()
+
+    val snapshotWithLabel = File(snapshotsDir, "images/app.cash.paparazzi.plugin.test_RecordTest_record_label.png")
+    assertThat(snapshotWithLabel.exists()).isTrue()
+
+    snapshotsDir.deleteRecursively()
+  }
+
+  @Test
+  fun verifySuccess() {
+    val fixtureRoot = File("src/test/projects/verify-mode-success")
+
+    val result = gradleRunner
+        .withArguments("verifyPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot) { build() }
+
+    assertThat(result.task(":testDebugUnitTest")).isNotNull()
+  }
+
+  @Test
+  fun verifyFailure() {
+    val fixtureRoot = File("src/test/projects/verify-mode-failure")
+
+    val result = gradleRunner
+        .withArguments("verifyPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot) { buildAndFail() }
+
+    assertThat(result.task(":testDebugUnitTest")).isNotNull()
+
+    val failureDir = File(fixtureRoot, "out/failures")
+    val delta = File(failureDir, "delta-app.cash.paparazzi.plugin.test_VerifyTest_verify.png")
+    assertThat(delta.exists()).isTrue()
+
+    val goldenImage = File(fixtureRoot, "src/test/resources/expected_delta.png")
+    assertThat(delta).isSimilarTo(goldenImage).withDefaultThreshold()
+
+    failureDir.deleteRecursively()
+  }
+
+  @Test
+  fun verifySuccessMultiModule() {
+    val fixtureRoot = File("src/test/projects/verify-mode-success-multiple-modules")
+    val moduleRoot = File(fixtureRoot, "module")
+
+    val result = gradleRunner
+        .withArguments("module:verifyPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot, moduleRoot) { build() }
+
+    assertThat(result.task(":module:testDebugUnitTest")).isNotNull()
+  }
+
+  @Test
+  fun verifyFailureMultiModule() {
+    val fixtureRoot = File("src/test/projects/verify-mode-failure-multiple-modules")
+    val moduleRoot = File(fixtureRoot, "module")
+
+    val result = gradleRunner
+        .withArguments("module:verifyPaparazziDebug", "--stacktrace")
+        .runFixture(fixtureRoot, moduleRoot) { buildAndFail() }
+
+    assertThat(result.task(":module:testDebugUnitTest")).isNotNull()
+
+    val failureDir = File(moduleRoot, "out/failures")
+    val delta = File(failureDir, "delta-app.cash.paparazzi.plugin.test_VerifyTest_verify.png")
+    assertThat(delta.exists()).isTrue()
+
+    val goldenImage = File(moduleRoot, "src/test/resources/expected_delta.png")
+    assertThat(delta).isSimilarTo(goldenImage).withDefaultThreshold()
+
+    failureDir.deleteRecursively()
+  }
+
+  @Test
   fun verifyResourcesGeneratedForJavaProject() {
     val fixtureRoot = File("src/test/projects/verify-resources-java")
 
@@ -43,13 +187,16 @@ class PaparazziPluginTest {
 
     assertThat(result.task(":preparePaparazziDebugResources")).isNotNull()
 
-    val resourcesFile = File(fixtureRoot, "build/intermediates/paparazzi/resources.txt")
+    val resourcesFile = File(fixtureRoot, "build/intermediates/paparazzi/debug/resources.txt")
     assertThat(resourcesFile.exists()).isTrue()
 
     val resourceFileContents = resourcesFile.readLines()
     assertThat(resourceFileContents[0]).isEqualTo("app.cash.paparazzi.plugin.test")
     assertThat(resourceFileContents[1]).endsWith(
         "src/test/projects/verify-resources-java/build/intermediates/res/merged/debug"
+    )
+    assertThat(resourceFileContents[4]).endsWith(
+        "src/test/projects/verify-resources-java/build/intermediates/library_assets/debug/out"
     )
   }
 
@@ -63,13 +210,16 @@ class PaparazziPluginTest {
 
     assertThat(result.task(":preparePaparazziDebugResources")).isNotNull()
 
-    val resourcesFile = File(fixtureRoot, "build/intermediates/paparazzi/resources.txt")
+    val resourcesFile = File(fixtureRoot, "build/intermediates/paparazzi/debug/resources.txt")
     assertThat(resourcesFile.exists()).isTrue()
 
     val resourceFileContents = resourcesFile.readLines()
     assertThat(resourceFileContents[0]).isEqualTo("app.cash.paparazzi.plugin.test")
     assertThat(resourceFileContents[1]).endsWith(
         "src/test/projects/verify-resources-kotlin/build/intermediates/res/merged/debug"
+    )
+    assertThat(resourceFileContents[4]).endsWith(
+        "src/test/projects/verify-resources-kotlin/build/intermediates/library_assets/debug/out"
     )
   }
 
@@ -85,7 +235,7 @@ class PaparazziPluginTest {
     assertThat(result.task(":testDebugUnitTest")).isNotNull()
 
     val snapshotsDir = File(fixtureRoot, "build/reports/paparazzi/images")
-    val snapshotFile = File(snapshotsDir, "8a7d289fef47bf8f177554eaa491fcfdf4fe1edf.png")
+    val snapshotFile = File(snapshotsDir, "6fca3e0a7f717916b1636195184e9f61c524369b.png")
     assertThat(snapshotFile.exists()).isTrue()
 
     val goldenImage = File(fixtureRoot, "src/test/resources/launch_without_fonts.png")
@@ -127,14 +277,12 @@ class PaparazziPluginTest {
         .runFixture(fixtureRoot) { build() }
 
     val snapshotsDir = File(fixtureRoot, "build/reports/paparazzi/images")
-    val snapshotFile = File(snapshotsDir, "c955e956af7c3127cffd96b9b7160aa609cfde23.png")
-    assertThat(snapshotFile.exists()).isTrue()
+    val snapshots = snapshotsDir.listFiles()
+    assertThat(snapshots!!).hasLength(1)
 
+    val snapshotImage = snapshots[0]
     val goldenImage = File(fixtureRoot, "src/test/resources/arrow_up.png")
-    val actualFileBytes = Files.readAllBytes(snapshotFile.toPath())
-    val expectedFileBytes = Files.readAllBytes(goldenImage.toPath())
-
-    assertThat(actualFileBytes).isEqualTo(expectedFileBytes)
+    assertThat(snapshotImage).isSimilarTo(goldenImage).withDefaultThreshold()
   }
 
   @Test
@@ -146,7 +294,7 @@ class PaparazziPluginTest {
         .runFixture(fixtureRoot) { build() }
 
     val snapshotsDir = File(fixtureRoot, "build/reports/paparazzi/images")
-    val snapshotFile = File(snapshotsDir, "f76880c9f1f1fcae4d3cfcc870496b9abe3ee81b.png")
+    val snapshotFile = File(snapshotsDir, "6dc7ccef5e1decc563e334e3d809fd68e6f6b122.png")
     assertThat(snapshotFile.exists()).isTrue()
 
     val goldenImage = File(fixtureRoot, "src/test/resources/arrow_missing.png")
@@ -165,14 +313,12 @@ class PaparazziPluginTest {
         .runFixture(fixtureRoot) { build() }
 
     val snapshotsDir = File(fixtureRoot, "build/reports/paparazzi/images")
-    val snapshotFile = File(snapshotsDir, "be373e00b3ff3a319e40b9d798b1d2a1e40dec7d.png")
-    assertThat(snapshotFile.exists()).isTrue()
+    val snapshots = snapshotsDir.listFiles()
+    assertThat(snapshots!!).hasLength(1)
 
+    val snapshotImage = snapshots[0]
     val goldenImage = File(fixtureRoot, "src/test/resources/arrow_present.png")
-    val actualFileBytes = Files.readAllBytes(snapshotFile.toPath())
-    val expectedFileBytes = Files.readAllBytes(goldenImage.toPath())
-
-    assertThat(actualFileBytes).isEqualTo(expectedFileBytes)
+    assertThat(snapshotImage).isSimilarTo(goldenImage).withDefaultThreshold()
   }
 
   @Test
@@ -210,31 +356,32 @@ class PaparazziPluginTest {
   }
 
   private fun GradleRunner.runFixture(
-    root: File,
+    projectRoot: File,
+    moduleRoot: File = projectRoot,
     action: GradleRunner.() -> BuildResult
   ): BuildResult {
-    val settings = File(root, "settings.gradle")
+    val settings = File(projectRoot, "settings.gradle")
     if (!settings.exists()) {
       settings.createNewFile()
       settings.deleteOnExit()
     }
 
-    val mainSourceRoot = File(root, "src/main")
+    val mainSourceRoot = File(moduleRoot, "src/main")
     val manifest = File(mainSourceRoot, "AndroidManifest.xml")
-    if (!manifest.exists()) {
+    if (!mainSourceRoot.exists() || !manifest.exists()) {
       mainSourceRoot.mkdirs()
       manifest.createNewFile()
       manifest.writeText("""<manifest package="app.cash.paparazzi.plugin.test"/>""")
       manifest.deleteOnExit()
     }
 
-    val gradleProperties = File(root, "gradle.properties")
+    val gradleProperties = File(projectRoot, "gradle.properties")
     if (!gradleProperties.exists()) {
       gradleProperties.createNewFile()
       gradleProperties.writeText("android.useAndroidX=true")
       gradleProperties.deleteOnExit()
     }
 
-    return withProjectDir(root).action()
+    return withProjectDir(projectRoot).action()
   }
 }

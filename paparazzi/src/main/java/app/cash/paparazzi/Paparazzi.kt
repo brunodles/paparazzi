@@ -23,10 +23,10 @@ import android.view.Choreographer_Delegate
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.AnimationUtils
 import androidx.annotation.LayoutRes
 import app.cash.paparazzi.agent.AgentTestRule
 import app.cash.paparazzi.agent.InterceptorRegistrar
+import app.cash.paparazzi.internal.EditModeInterceptor
 import app.cash.paparazzi.internal.ImageUtils
 import app.cash.paparazzi.internal.LayoutPullParser
 import app.cash.paparazzi.internal.PaparazziCallback
@@ -57,7 +57,7 @@ class Paparazzi(
   private val deviceConfig: DeviceConfig = DeviceConfig.NEXUS_5,
   private val theme: String = "android:Theme.Material.NoActionBar.Fullscreen",
   private val appCompatEnabled: Boolean = true,
-  private val snapshotHandler: SnapshotHandler = HtmlReportWriter()
+  private val snapshotHandler: SnapshotHandler = determineHandler()
 ) : TestRule {
   private val THUMBNAIL_SIZE = 1000
 
@@ -67,7 +67,6 @@ class Paparazzi(
   private lateinit var renderSession: RenderSessionImpl
   private lateinit var bridgeRenderSession: RenderSession
   private var testName: TestName? = null
-  private var snapshotCount = 0
 
   val layoutInflater: LayoutInflater
     get() = RenderAction.getCurrentContext().getSystemService("layout_inflater") as BridgeInflater
@@ -100,7 +99,11 @@ class Paparazzi(
       }
     }
 
-    return wrapIfResourceCompatDetected(statement, description)
+    registerFontLookupInterceptionIfResourceCompatDetected()
+    registerViewEditModeInterception()
+
+    val outerRule = AgentTestRule()
+    return outerRule.apply(statement, description)
   }
 
   fun prepare(description: Description) {
@@ -123,7 +126,7 @@ class Paparazzi(
         .withTheme(theme)
 
     val sessionParams = sessionParamsBuilder.build()
-    renderSession = RenderSessionImpl(sessionParams)
+    renderSession = createRenderSession(sessionParams)
     prepareThread()
     renderSession.init(sessionParams.timeout)
 
@@ -201,23 +204,23 @@ class Paparazzi(
       }
 
       val sessionParams = sessionParamsBuilder.build()
-      renderSession = RenderSessionImpl(sessionParams)
+      renderSession = createRenderSession(sessionParams)
       renderSession.init(sessionParams.timeout)
       bridgeRenderSession = createBridgeSession(renderSession, renderSession.inflate())
     }
 
-    snapshotCount++
-    val snapshot = Snapshot(name ?: snapshotCount.toString(), testName!!, Date())
+    val snapshot = Snapshot(name, testName!!, Date())
 
     val frameHandler = snapshotHandler.newFrameHandler(snapshot, frameCount, fps)
     frameHandler.use {
       val viewGroup = bridgeRenderSession.rootViews[0].viewObject as ViewGroup
-      viewGroup.addView(view)
       try {
         withTime(0L) {
-          // Empty block to initialize the choreographer at time=0.
+          // Initialize the choreographer at time=0.
+          Choreographer_Delegate.doFrame(System_Delegate.nanoTime())
         }
 
+        viewGroup.addView(view)
         for (frame in 0 until frameCount) {
           val nowNanos = (startNanos + (frame * 1_000_000_000.0 / fps)).toLong()
           withTime(nowNanos) {
@@ -240,15 +243,24 @@ class Paparazzi(
     // Execute the block at the requested time.
     System_Delegate.setBootTimeNanos(frameNanos)
     System_Delegate.setNanosTime(frameNanos)
-    Choreographer_Delegate.doFrame(frameNanos)
-    AnimationUtils.lockAnimationClock(TimeUnit.NANOSECONDS.toMillis(frameNanos))
     try {
       block()
     } finally {
-      AnimationUtils.unlockAnimationClock()
       System_Delegate.setNanosTime(0L)
       System_Delegate.setBootTimeNanos(0L)
     }
+  }
+
+  private fun createRenderSession(sessionParams: SessionParams): RenderSessionImpl {
+    val renderSession = RenderSessionImpl(sessionParams)
+    renderSession.setElapsedFrameTimeNanos(0L)
+    RenderSessionImpl::class.java
+        .getDeclaredField("mFirstFrameExecuted")
+        .apply {
+          isAccessible = true
+          set(renderSession, true)
+        }
+    return renderSession
   }
 
   private fun createBridgeSession(
@@ -294,6 +306,7 @@ class Paparazzi(
     versionClass
         .getDeclaredField("SDK_INT")
         .apply {
+          isAccessible = true
           modifiersField.setInt(this, modifiers and Modifier.FINAL.inv())
           setInt(null, compileSdkVersion)
         }
@@ -379,25 +392,36 @@ class Paparazzi(
    * https://github.com/cashapp/paparazzi/issues/119
    * https://issuetracker.google.com/issues/156065472
    */
-  private fun wrapIfResourceCompatDetected(
-    innerStatement: Statement,
-    description: Description
-  ): Statement {
-    return try {
+  private fun registerFontLookupInterceptionIfResourceCompatDetected() {
+    try {
       val resourcesCompatClass = Class.forName("androidx.core.content.res.ResourcesCompat")
       InterceptorRegistrar.addMethodInterceptor(
           resourcesCompatClass, "getFont", ResourcesInterceptor::class.java
       )
-      val outerRule = AgentTestRule()
-      outerRule.apply(innerStatement, description)
     } catch (e: ClassNotFoundException) {
-      logger.info("ResourceCompat not found on classpath, exiting...")
-      innerStatement
+      logger.info("ResourceCompat not found on classpath...")
     }
+  }
+
+  private fun registerViewEditModeInterception() {
+    val viewClass = Class.forName("android.view.View")
+    InterceptorRegistrar.addMethodInterceptor(
+        viewClass, "isInEditMode", EditModeInterceptor::class.java
+    )
   }
 
   companion object {
     /** The choreographer doesn't like 0 as a frame time, so start an hour later. */
     internal val TIME_OFFSET_NANOS = TimeUnit.HOURS.toNanos(1L)
+
+    private val isVerifying: Boolean =
+      System.getProperty("paparazzi.test.verify")?.toBoolean() == true
+
+    private fun determineHandler(): SnapshotHandler =
+      if (isVerifying) {
+        SnapshotVerifier()
+      } else {
+        HtmlReportWriter()
+      }
   }
 }

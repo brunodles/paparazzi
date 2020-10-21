@@ -1,7 +1,7 @@
 plugins {
   id 'maven-publish'
   id 'signing'
-  id 'org.ajoberstar.grgit' version '3.1.1'
+  id 'org.ajoberstar.grgit' version '4.0.2'
 }
 
 /**
@@ -26,11 +26,13 @@ task cloneLayoutlib() {
       dir = repoDir
     }
     repo.checkout {
-      branch = 'studio-3.4.0'
+      // maps to this commit: https://android.googlesource.com/platform/prebuilts/studio/layoutlib/+/b169460c8473a1e87aafa01da881556682fa4f86
+      // which runs on JDK 11
+      branch = 'b169460'
     }
   }
 
-  ext.layoutlibJar = new File("$repoDir/data/layoutlib.jar")
+  ext.layoutlibJar = new File("$repoDir/data/layoutlib-jdk11.jar")
 }
 
 task sourcesJar(type: Jar) {
@@ -49,8 +51,8 @@ publishing {
   publications {
     mavenJava(MavenPublication) {
       groupId = 'app.cash.paparazzi'
-      artifactId = 'layoutlib'
-      version = '3.4.0'
+      artifactId = 'layoutlib-jdk11'
+      version = '4.0.0-alpha02-b169460'
 
       pom {
         name = "layoutlib"

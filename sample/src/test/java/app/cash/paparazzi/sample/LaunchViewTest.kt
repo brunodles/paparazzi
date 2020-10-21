@@ -19,39 +19,39 @@ import android.widget.LinearLayout
 import app.cash.paparazzi.Paparazzi
 import app.cash.paparazzi.DeviceConfig.Companion.NEXUS_5
 import app.cash.paparazzi.DeviceConfig.Companion.NEXUS_5_LAND
-import app.cash.paparazzi.DeviceConfig.Companion.NEXUS_7
+import app.cash.paparazzi.DeviceConfig.Companion.PIXEL_3
 import org.junit.Rule
 import org.junit.Test
 
 class LaunchViewTest {
   @get:Rule
-  var paparazzi = Paparazzi(deviceConfig = NEXUS_7)
+  var paparazzi = Paparazzi(deviceConfig = PIXEL_3)
 
   @Test
-  fun nexus7() {
+  fun pixel3() {
     val launch = paparazzi.inflate<LinearLayout>(R.layout.launch)
-    paparazzi.snapshot(launch, "launch nexus7")
+    paparazzi.snapshot(launch)
+  }
+
+  @Test
+  fun pixel3_differentThemes() {
+    val launch = paparazzi.inflate<LinearLayout>(R.layout.launch)
+    paparazzi.snapshot(
+        view = launch,
+        name = "light",
+        theme = "android:Theme.Material.Light"
+    )
+    paparazzi.snapshot(
+        view = launch,
+        name = "light no_action_bar",
+        theme = "android:Theme.Material.Light.NoActionBar"
+    )
   }
 
   @Test
   fun nexus5_differentOrientations() {
     val launch = paparazzi.inflate<LinearLayout>(R.layout.launch)
-    paparazzi.snapshot(launch, "launch nexus 5 portrait", deviceConfig = NEXUS_5)
-    paparazzi.snapshot(launch, "launch nexus 5 landscape", deviceConfig = NEXUS_5_LAND)
-  }
-
-  @Test
-  fun nexus7_differentThemes() {
-    val launch = paparazzi.inflate<LinearLayout>(R.layout.launch)
-    paparazzi.snapshot(
-        view = launch,
-        name = "launch nexus 7 light",
-        theme = "android:Theme.Material.Light"
-    )
-    paparazzi.snapshot(
-        view = launch,
-        name = "launch nexus 7 light no-action-bar",
-        theme = "android:Theme.Material.Light.NoActionBar"
-    )
+    paparazzi.snapshot(launch, "portrait", deviceConfig = NEXUS_5)
+    paparazzi.snapshot(launch, "landscape", deviceConfig = NEXUS_5_LAND)
   }
 }
